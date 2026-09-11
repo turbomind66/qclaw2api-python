@@ -1,0 +1,5 @@
+# qclaw2api 运行时依赖（仅两个，其余全部标准库）
+requests>=2.31.0
+
+# 可选：配置 upstash.url / upstash.token 后才需要（未配置会自动降级为纯内存模式）
+redis>=5.0.0
