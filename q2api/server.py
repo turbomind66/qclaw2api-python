@@ -94,6 +94,25 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:  # noqa
                 pass
 
+    # ---- CORS（允许本地桌面客户端跨域直连 127.0.0.1）----
+    # 很多桌面客户端（Electron/Chromium 渲染进程）直连本地模型时会受同源策略限制，
+    # 标准 http.server 默认不带 CORS 头，会被浏览器拦截；这里统一补上，并响应 OPTIONS 预检。
+    def end_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Expose-Headers", "X-Q2A-Uid")
+        # 关闭 keep-alive：每个请求独立 TCP 连接。避免 HTTP/1.1 连接复用时，
+        # 上一请求体未读尽导致残留字节污染下一请求行（表现为 400 Bad request syntax）。
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        self._drain_body()
+        self.send_response(204)
+        self.end_headers()
+
     # ---- 路由 ----
     def do_GET(self):
         path = urlparse(self.path).path
@@ -146,7 +165,22 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _send_openai_error(self, status: int, code: str, msg: str) -> None:
+        # 错误分支入口统一读尽请求体，避免连接复用时残留字节污染下一请求。
+        self._drain_body()
         self._send_json(status, {"error": {"message": msg, "type": "api_error", "code": code}})
+
+    def _drain_body(self) -> None:
+        """读尽当前请求体（若有），防止 keep-alive 连接复用下残留字节污染后续请求。"""
+        try:
+            clen = int(self.headers.get("Content-Length", "0") or 0)
+            remaining = clen
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except Exception:  # noqa: 连接已断/读异常都直接忽略
+            pass
 
     # ---- 端点 ----
     def healthz(self):
@@ -311,7 +345,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
             self.send_header("X-Accel-Buffering", "no")
             self.send_header("X-Q2A-Uid", acct.uid)
             self.end_headers()
