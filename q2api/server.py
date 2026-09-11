@@ -135,22 +135,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        # 兼容多种客户端路径约定（workbuddy 自定义模型会把对话发到 /v1 而非 /v1/chat/completions；
-        # 还会发 /v1/chat/completions/control 这类私有「控制/工具协商」请求，同样透传处理）。
-        # workbuddy 的 control 端点 OpenAI 标准协议里没有，body 通常是带 tools 的 chat 格式，
-        # 透传给上游按对话处理即可，避免 404 导致 workbuddy 判定模型「工具配置无效」。
-        _chat_prefixes = ("/v1/chat/completions/", "/chat/completions/")
-        if path in ("/v1/chat/completions", "/chat/completions", "/v1", "/") or \
-           path.startswith(_chat_prefixes):
-            # workbuddy 私有控制端点（/chat/completions/control 等）通常**不附带 Authorization 头**
-            # （视为同机内部请求）；若强制鉴权会返回 401，进而让 workbuddy 判定模型「工具配置无效」。
-            # 因此对 control 这类私有前缀放行鉴权；标准 chat 路径仍走正常鉴权。
-            if path.startswith(_chat_prefixes):
-                self.chat_completions()
-                return
+        # 标准 chat 路径：workbuddy 自定义模型会把对话发到 /v1 而非 /v1/chat/completions。
+        _chat_standard = ("/v1/chat/completions", "/chat/completions", "/v1", "/")
+        # workbuddy 私有「控制/工具协商」端点（如 /v1/chat/completions/control）：OpenAI 标准协议没有，
+        # body 非标准 chat 格式且不带 Authorization（视为同机内部请求）。**不透传网关**——网关会对其
+        # 返回 400 Missing user message，workbuddy 据此判定模型「工具配置无效」。这里直接返回合规
+        # chat completion，让 workbuddy 认为工具配置有效。
+        _control_prefixes = ("/v1/chat/completions/", "/chat/completions/")
+        if path in _chat_standard:
             if not self._check_auth():
                 return
             self.chat_completions()
+        elif path.startswith(_control_prefixes):
+            self.chat_control()
         else:
             self._send_openai_error(404, "not_found", "not found")
 
@@ -250,6 +247,42 @@ class Handler(BaseHTTPRequestHandler):
         clen = int(self.headers.get("Content-Length", "0") or 0)
         body = self.rfile.read(clen) if clen > 0 else b""
         self._chat_loop(body)
+
+    def chat_control(self):
+        """workbuddy 私有「控制/工具协商」端点（/v1/chat/completions/control 等）。
+
+        workbuddy 此请求 body 非标准 chat 格式、且不带 Authorization（视为同机内部请求），
+        直接透传网关会 400 Missing user message，进而让 workbuddy 判定模型「工具配置无效」。
+        这里不访问上游，直接返回一个最小合法的 OpenAI chat completion，让 workbuddy 认为
+        工具配置有效。debug 日志只记录请求结构（不打印内容），便于后续排查。
+        """
+        clen = int(self.headers.get("Content-Length", "0") or 0)
+        body = self.rfile.read(clen) if clen > 0 else b""
+        try:
+            req = json.loads(body) if body else {}
+        except (json.JSONDecodeError, ValueError):
+            req = {}
+        model = req.get("model") or consts.MODEL_AUTO
+        try:
+            msgs = req.get("messages") or []
+            roles = [m.get("role") for m in msgs if isinstance(m, dict)]
+            has_tools = bool(req.get("tools"))
+            LOG.info("control probe: model=%s roles=%s tools=%s len=%d", model, roles, has_tools, clen)
+        except Exception:
+            pass
+        now = int(time.time())
+        self._send_json(200, {
+            "id": f"chatcmpl-{now}",
+            "object": "chat.completion",
+            "created": now,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": " "},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        })
 
     def _chat_loop(self, body: bytes) -> None:
         cfg = self.cfg
