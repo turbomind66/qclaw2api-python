@@ -1,5 +1,6 @@
-# qclaw2api 运行时依赖（仅两个，其余全部标准库）
+# qclaw2api runtime deps (only two; everything else is stdlib)
 requests>=2.31.0
 
-# 可选：配置 upstash.url / upstash.token 后才需要（未配置会自动降级为纯内存模式）
+# optional: only needed when upstash.url / upstash.token are configured
+# (without it the pool state auto-degrades to in-memory mode)
 redis>=5.0.0
