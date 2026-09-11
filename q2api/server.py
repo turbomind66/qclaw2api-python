@@ -135,8 +135,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        # 兼容多种客户端路径约定（workbuddy 自定义模型会把对话发到 /v1 而非 /v1/chat/completions）
-        if path in ("/v1/chat/completions", "/chat/completions", "/v1", "/"):
+        # 兼容多种客户端路径约定（workbuddy 自定义模型会把对话发到 /v1 而非 /v1/chat/completions；
+        # 还会发 /v1/chat/completions/control 这类私有「控制/工具协商」请求，同样透传处理）。
+        # workbuddy 的 control 端点 OpenAI 标准协议里没有，body 通常是带 tools 的 chat 格式，
+        # 透传给上游按对话处理即可，避免 404 导致 workbuddy 判定模型「工具配置无效」。
+        _chat_prefixes = ("/v1/chat/completions/", "/chat/completions/")
+        if path in ("/v1/chat/completions", "/chat/completions", "/v1", "/") or \
+           path.startswith(_chat_prefixes):
             if not self._check_auth():
                 return
             self.chat_completions()
