@@ -142,6 +142,12 @@ class Handler(BaseHTTPRequestHandler):
         _chat_prefixes = ("/v1/chat/completions/", "/chat/completions/")
         if path in ("/v1/chat/completions", "/chat/completions", "/v1", "/") or \
            path.startswith(_chat_prefixes):
+            # workbuddy 私有控制端点（/chat/completions/control 等）通常**不附带 Authorization 头**
+            # （视为同机内部请求）；若强制鉴权会返回 401，进而让 workbuddy 判定模型「工具配置无效」。
+            # 因此对 control 这类私有前缀放行鉴权；标准 chat 路径仍走正常鉴权。
+            if path.startswith(_chat_prefixes):
+                self.chat_completions()
+                return
             if not self._check_auth():
                 return
             self.chat_completions()
