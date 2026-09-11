@@ -71,8 +71,11 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     _headers_sent = False
 
-    def log_message(self, fmt, *args):  # 静默默认访问日志
-        return
+    def log_message(self, fmt, *args):  # 访问日志（method path status）便于排查客户端路径
+        try:
+            LOG.info("req %s", fmt % args)
+        except Exception:
+            pass
 
     def send_response(self, code, message=None):
         self._headers_sent = True
@@ -116,7 +119,8 @@ class Handler(BaseHTTPRequestHandler):
     # ---- 路由 ----
     def do_GET(self):
         path = urlparse(self.path).path
-        if path == "/v1/models":
+        # 兼容多种客户端路径约定：/v1/models 与 /models 都视为模型列表
+        if path in ("/v1/models", "/models"):
             if not self._check_auth():
                 return
             self.models()
@@ -131,7 +135,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path == "/v1/chat/completions":
+        # 兼容多种客户端路径约定（workbuddy 自定义模型会把对话发到 /v1 而非 /v1/chat/completions）
+        if path in ("/v1/chat/completions", "/chat/completions", "/v1", "/"):
             if not self._check_auth():
                 return
             self.chat_completions()
