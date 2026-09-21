@@ -54,6 +54,24 @@ def main() -> int:
         print("   请先执行: py cli/key.py add <apiKey>")
         print("   或生成假凭证用于联调: py cli/key.py gen-fake 3")
 
+    # 上游网关自动跟随：base_url 设为 "auto"/空时，从 QClaw openclaw.json 读真实
+    # 端口（与 token），避免网关重启换端口后静默 502。token 同步覆盖账号凭证，
+    # 防止网关 token 变化导致 401。
+    _base = (c.Upstream.BaseURL or "").strip().lower()
+    if not c.Upstream.BaseURL or _base == "auto":
+        try:
+            gbase, gtoken = cfgmod.Config.resolve_gateway(c.Upstream.GatewayConfigPath)
+            c.Upstream.BaseURL = gbase
+            if gtoken:
+                for a in auths:
+                    a.api_key = gtoken
+            print(f"[gateway] 自动解析上游: {gbase}"
+                  + ("（token 已同步）" if gtoken else "（未找到 token，沿用 auths）"))
+        except Exception as e:
+            print(f"⚠️  自动解析 QClaw 网关失败: {e}")
+            print("   请确认 openclaw.json 存在，或显式设置 upstream.base_url")
+
+
     pool = Pool(state_file)
     pool.set_breaker(c.Pool.BreakerThreshold, c.BreakerCooldownDur, c.BreakerCooldownMaxD)
     pool.set_weights(c.Pool.IdleWeightPerHour, c.Pool.IdleWeightMax)
@@ -92,6 +110,23 @@ def main() -> int:
                         session=session, sticky_count=sticky_count,
                         redis_mode="upstash" if c.Upstash.URL else "noop",
                         soft_cooldown=c.SoftRateDur)
+
+    # 上游连通性自检（后台线程，避免网关响应慢时阻塞启动；仅给出明确告警，
+    # 防止网关挂掉/换端口时静默 502）
+    if auths:
+        def _selfcheck():
+            _acct = pool.pick()
+            if _acct is None:
+                return
+            _err = up.probe(_acct)
+            if _err is not None:
+                print(f"⚠️  上游网关连通性自检失败: {_err}")
+                print("   请确认 QClaw 网关已启动，且端口与 openclaw.json 的 gateway.port 一致")
+            else:
+                print("✅ 上游网关连通性自检通过")
+        import threading
+        threading.Thread(target=_selfcheck, daemon=True).start()
+
     httpd = serve(scfg, c.listen)
 
     total, healthy, cooling, disabled, _ = pool.counts_detailed()
