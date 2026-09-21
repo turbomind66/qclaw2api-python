@@ -1,0 +1,44 @@
+{
+  "listen": ":7864",
+  "api_key": "qclawiloveryou888",
+  "auth_dir": "./auths",
+  "state_file": "./data/state.json",
+
+  "cooldown": {
+    "soft_rate": "60s"
+  },
+
+  "schedule": {
+    "probe_interval": "30m"
+  },
+
+  "upstream": {
+    "base_url": "auto",
+    "gateway_config_path": "~/.qclaw/openclaw.json",
+    "timeout_seconds": 120,
+    "max_tokens_cap": 0,
+    "auto_system_prompt": true,
+    "auto_system_text": "You are a helpful assistant.",
+    "default_model": "openclaw"
+  },
+
+  "upstash": {
+    "url": "",
+    "token": ""
+  },
+
+  "pool": {
+    "max_in_flight": 3,
+    "breaker_threshold": 3,
+    "breaker_cooldown": "30m",
+    "breaker_cooldown_max": "6h",
+    "idle_weight_per_hour": 0.5,
+    "idle_weight_max": 5.0
+  },
+
+  "session_sticky": {
+    "enabled": true,
+    "ttl": "30m",
+    "gc_interval": "5m"
+  }
+}
