@@ -77,6 +77,7 @@ class Config:
         self.Schedule = SimpleNamespace(ProbeInterval="30m")
         self.Upstream = SimpleNamespace(
             BaseURL="",
+            GatewayConfigPath="~/.qclaw/openclaw.json",
             TimeoutSeconds=120,
             MaxTokensCap=0,
             AutoSystemPrompt=True,
@@ -140,6 +141,8 @@ class Config:
         if isinstance(up, dict):
             if "base_url" in up:
                 self.Upstream.BaseURL = up["base_url"]
+            if "gateway_config_path" in up:
+                self.Upstream.GatewayConfigPath = up["gateway_config_path"]
             if "timeout_seconds" in up:
                 self.Upstream.TimeoutSeconds = up["timeout_seconds"]
             if "max_tokens_cap" in up:
@@ -197,6 +200,34 @@ class Config:
             self.Upstream.AutoSystemPrompt = _bool_env(v, True)
         if v := os.environ.get("Q2A_UPSTREAM_DEFAULT_MODEL"):
             self.Upstream.DefaultModel = v
+
+    @staticmethod
+    def resolve_gateway(path: str):
+        """从 QClaw 的 openclaw.json 读取网关 port（与 token），自动构造上游 base_url。
+
+        用途：当 `upstream.base_url` 设为 "auto"（或留空）时，跟随 QClaw 网关的
+        实际监听端口，避免网关重启换端口后代理因硬编码旧端口而静默 502。
+
+        返回 (base_url, token)：
+          - base_url: "http://127.0.0.1:<port>/v1"
+          - token:    gateway.auth.token（可能为空串，调用方按需覆盖账号凭证）
+        失败抛异常（文件缺失 / gateway.port 缺失），由调用方给出明确告警。
+        """
+        from pathlib import Path as _Path
+        p = _Path(os.path.expanduser(path)).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f"gateway config not found: {p}")
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            raise ValueError(f"read gateway config {p}: {e}")
+        gw = data.get("gateway") or {}
+        port = gw.get("port")
+        if not port:
+            raise ValueError(f"gateway.port missing in {p}")
+        token = (gw.get("auth") or {}).get("token", "") or ""
+        base = f"http://127.0.0.1:{port}/v1"
+        return base, token
 
     def _normalize(self) -> None:
         self.SoftRateDur = parse_duration(self.Cooldown.SoftRate)
